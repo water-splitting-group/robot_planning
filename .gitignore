@@ -1,0 +1,7 @@
+# Local Python environment and caches
+.venv/
+__pycache__/
+.pytest_cache/
+
+# Output folders written by the app
+runs/

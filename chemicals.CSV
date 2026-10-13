@@ -1,0 +1,13 @@
+Name;category;M (g/mol);max_solubility_M;density_g_mL;type;comment
+Ru(bpy)3Cl2·6H2O;PS;748.62;0.05;non;solid;-
+PDI-SO3;PS;1391.60;0.001;non;solid;-
+Ru(dcepy)2(bpy)(PF6)2;PS;1147.81;0.001;non;solid;-
+Co-POM;cat;5000.0;100e-6;non;solid;-
+Ru(bda)(isoq)2;cat;601.58;120e-6;non;solid;-
+Ru(dpp)(pic)2(PF6)2;cat;911.64;50e-6;non;solid;-
+Na2S2O8;sac reagent;238.1;1.0;non;solid;-
+NaHCO3;acid;84.006;1.0;non;solid;-
+NaH2PO4;acid;119.98;4.0;non;solid;-
+Na2CO3;base;105.99;1.0;non;solid;-
+Na2HPO4;base;141.96;0.5;non;solid;-
+H2O;solvent;18.02;55.5;1.0;solvent;-
