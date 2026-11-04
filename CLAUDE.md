@@ -10,8 +10,9 @@ oxidant, the pH and the robot settings per experiment, plus the buffer system, t
 buffer concentration and number of vials per experiment for the run. Buffer acid and
 base follow from the pH. The planner chooses one stock solution
 per component so that every vial receives 0.2–0.85 mL of it, fills up with water, and
-writes the run files: `experiments_design.csv`, `stock_solutions.csv` and the robot
-input `experiment.yml`. If a run is impossible within these limits, it says why.
+writes the run files: `experiments_design.csv`, `stock_solutions.csv`, the robot
+input `experiment.yml` and `overview.xlsx` (layout of the lab's `overview_BA.xlsx`). If a
+run is impossible within these limits, it says why.
 
 Keep it simple: this is a small lab tool used by one person, not a library.
 
@@ -37,11 +38,12 @@ py -3.13 -m venv .venv
 - **One stock solution per role and run.** The robot has one position per role, so all vials of a run share the five chemicals and differ only in volumes. Never introduce several stocks of one chemical without asking.
 - **Stock concentration** is the lowest that reaches the highest target with `MAX_ADDITION_ML`; a run is impossible if that exceeds the solubility, or if any non-zero target then needs less than `MIN_ADDITION_ML`.
 - **Concentration 0 means the component is left out** of that vial: no addition, name letter `A`, exempt from the minimum volume.
-- **Names** are `MRG-059-<photosensitizer letter><catalyst letter>-<nn>`, with `nn` zero-padded to two digits and counting separately per letter pair from a start number the user sets per pair (`start_numbers` in `plan_run`, default 1). Letters live in `NAME_LETTERS`.
+- **Names** are `<prefix>-<photosensitizer letter><catalyst letter>-<nn>`. The prefix is set per run (`name_prefix` in `plan_run`, default `MRG-059`) and must be 2–3 capital letters, a hyphen and 3–4 digits. `nn` is zero-padded to two digits and counts separately per letter pair from a start number the user sets per pair (`start_numbers` in `plan_run`, default 1). Letters live in `NAME_LETTERS`.
 - **Units:** the app takes photosensitizer and catalyst in µM, sacrificial oxidant and buffer in mM, and converts to M (by division, to keep decimal values exact) in `convert_to_molar`. `planner.py` and all output files work in M.
 - **Buffer:** system and total concentration are per run, pH per experiment. `split_buffer` applies Henderson–Hasselbalch for an ideal buffer. Acid and base are separate stocks (mixed only in the vial), each subject to the usual pipetting limits across the run.
 - **Robot settings are per experiment** (columns of the experiment table), not per run.
-- **`experiment.yml` is formatted by hand** to match the robot's existing files (key order `ROBOT_FILE_KEYS`, unit comments, `run: "true"`, closing `MRG-059-stop` entry). Tests parse it with PyYAML.
+- **`experiment.yml` is formatted by hand** to match the robot's existing files (key order `ROBOT_FILE_KEYS`, unit comments, `run: "true"`, closing `<prefix>-stop` entry). Tests parse it with PyYAML.
+- **`overview.xlsx` mirrors `overview_BA.xlsx`** (headers, formats and widths in `OVERVIEW_COLUMNS`, buffer codes in `OVERVIEW_BUFFER_NUMBERS`). Keep the headers unchanged; the lab's existing overviews use them.
 - **Impossible runs raise `PlanningError`**; the app catches only that and shows it as an error. Everything else propagates.
 
 ## Coding principles

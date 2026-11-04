@@ -7,12 +7,12 @@ import pandas as pd
 import streamlit as st
 
 from planner import (
+    DEFAULT_NAME_PREFIX,
     DEFAULT_ROBOT_SETTINGS,
     DEFAULT_TOTAL_VOLUME_ML,
     ENTERED_ROLES,
     LED_CURRENTS_MA,
     MAX_PH_SPAN_PER_RUN,
-    NAME_PREFIX,
     ROLE_CATEGORIES,
     USABLE_PH_DISTANCE_FROM_PKA,
     PlanningError,
@@ -170,7 +170,7 @@ def convert_to_molar(experiments):
     return molar
 
 
-def select_start_numbers(experiments, chemical_by_role):
+def select_start_numbers(experiments, chemical_by_role, name_prefix):
     """Let the user set the first running number of every letter pair in the run.
 
     The inputs are keyed by letter pair, so a value survives as long as its pair stays in
@@ -182,6 +182,8 @@ def select_start_numbers(experiments, chemical_by_role):
         The experiment table in M.
     chemical_by_role : dict
         Chemical name for every role in ENTERED_ROLES.
+    name_prefix : str
+        Prefix of the run's vial names, shown in the labels.
 
     Returns
     -------
@@ -195,7 +197,7 @@ def select_start_numbers(experiments, chemical_by_role):
     st.subheader("Numbering")
     st.caption("First number of each name series in this run.")
     return {
-        pair: column.number_input(f"Start {NAME_PREFIX}{pair}-", min_value=1, value=1, key=f"start_number_{pair}")
+        pair: column.number_input(f"Start {name_prefix}-{pair}-", min_value=1, value=1, key=f"start_number_{pair}")
         for column, pair in zip(st.columns(len(letter_pairs)), letter_pairs)
     }
 
@@ -227,7 +229,7 @@ def save_plan(plan):
     """
     directory = OUTPUT_DIRECTORY / datetime.now().strftime("%Y-%m-%d_%H%M%S")
     write_run_files(plan, directory)
-    st.success(f"Saved experiments_design.csv, stock_solutions.csv and experiment.yml to {directory}")
+    st.success(f"Saved experiments_design.csv, stock_solutions.csv, experiment.yml and overview.xlsx to {directory}")
 
 
 def main():
@@ -239,9 +241,14 @@ def main():
     chemical_by_role = select_chemicals(chemicals)
     buffer_system, buffer_concentration = select_buffer(load_buffers(BUFFERS_FILE))
 
-    volume_column, replicates_column = st.columns(2)
+    volume_column, replicates_column, prefix_column = st.columns(3)
     total_volume_ml = volume_column.number_input("Total volume per vial [mL]", min_value=0.1, value=DEFAULT_TOTAL_VOLUME_ML)
     replicates = replicates_column.number_input("Vials per experiment", min_value=1, value=DEFAULT_REPLICATES)
+    name_prefix = prefix_column.text_input(
+        "Name prefix",
+        value=DEFAULT_NAME_PREFIX,
+        help=f"2–3 capital letters, a hyphen and 3–4 digits, e.g. {DEFAULT_NAME_PREFIX}. All vials of the run share it.",
+    )
 
     st.subheader("Experiments")
     st.caption(
@@ -258,7 +265,7 @@ def main():
     )
 
     try:
-        start_numbers = select_start_numbers(experiments, chemical_by_role)
+        start_numbers = select_start_numbers(experiments, chemical_by_role, name_prefix)
         plan = plan_run(
             experiments,
             replicates,
@@ -268,6 +275,7 @@ def main():
             buffer_system,
             buffer_concentration,
             start_numbers,
+            name_prefix,
         )
     except PlanningError as error:
         st.error(f"The calculation is not possible. {error}")

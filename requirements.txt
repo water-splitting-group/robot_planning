@@ -1,5 +1,7 @@
 pandas
 streamlit
+# overview.xlsx
+openpyxl
 # tests
 pytest
 pyyaml

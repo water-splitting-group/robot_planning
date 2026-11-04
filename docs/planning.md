@@ -40,7 +40,10 @@ vials, in the order experiment 1, experiment 1, experiment 2, experiment 2, …
 
 Each vial gets a name like `MRG-059-BC-01`:
 
-- `MRG-059-` is fixed.
+- `MRG-059` is the **name prefix** of the run, entered next to *Vials per experiment*.
+  It is 2–3 capital letters, a hyphen and 3–4 digits (e.g. `MRG-059` or `AE-413`), and all
+  vials of one run share it. Anything else is rejected with a message. The app suggests
+  `MRG-059` (`DEFAULT_NAME_PREFIX`).
 - The first letter stands for the photosensitizer: `B` Ru(bpy)3Cl2·6H2O, `C` PDI-SO3,
   `D` Ru(dcepy)2(bpy)(PF6)2.
 - The second letter stands for the catalyst: `B` Co-POM, `C` Ru(bda)(isoq)2,
@@ -189,7 +192,7 @@ The volume is rounded up to 0.01 mL, and the mass to weigh in follows from
 
 ## 3. Output files
 
-Pressing *Save files* writes three files into a new folder `runs/<date>_<time>/`. An
+Pressing *Save files* writes four files into a new folder `runs/<date>_<time>/`. An
 existing folder is never overwritten.
 
 **`experiments_design.csv`**: one row per vial with its name, the total volume in µL,
@@ -207,9 +210,37 @@ a one-line instruction.
 **`experiment.yml`**: the robot's input. It has one entry per vial with its name,
 `run: "true"`, the pipetting volumes in mL and the robot settings of its experiment
 (voltage, LED current, duty cycle, frequency, degassing, measurement and baseline
-times). The last entry, `MRG-059-stop` with `run: "false"`, tells the robot to stop.
-It repeats the settings of the last vial. The file is written by hand rather than
-with a YAML library, to keep the layout and unit comments of the robot's existing files.
+times). The last entry, `<name prefix>-stop` (e.g. `MRG-059-stop`) with `run: "false"`,
+tells the robot to stop. It repeats the settings of the last vial. The file is written by
+hand rather than with a YAML library, to keep the layout and unit comments of the robot's
+existing files.
+
+**`overview.xlsx`**: the run in the layout of the lab's overview workbook
+(`overview_BA.xlsx`), so its rows can be copied into the existing overviews. The first
+sheet, *Overview*, has one row per vial:
+
+| Column | Content |
+|---|---|
+| Experiment | vial name |
+| group | empty, for you to fill in |
+| File name O2 | `results_<vial name>.csv`, the file the O2 measurement is saved as |
+| Power output [W/m^2] | the LED driver current in mA, as in the template (350, 500, …) |
+| Duty cycle [%], Frequency [Hz] | robot settings of the experiment |
+| Photosensitizer, Catalyst | chemical name, or `none` if the vial does not contain it |
+| c(photosensitizer) [M], c(catalyst) [M], c(Na2S2O8) [M] | target concentrations |
+| pH [-], c(buffer) [M] | pH and total buffer concentration |
+| buffer used | code of the buffer system, explained on the second sheet |
+| Active | `TRUE`; untick a failed measurement with the dropdown |
+| color | plot colour (matplotlib name); the vials of one experiment share it, cycling through `OVERVIEW_COLORS` |
+| annotations | empty |
+
+Column widths, number formats, the bold header and the frozen first row and column follow
+the template. The 200 rows below the header (`OVERVIEW_PREPARED_ROWS`) carry the number
+formats even when empty, so rows added by hand look the same. The second sheet,
+*Buffer numbers*, lists the codes of `OVERVIEW_BUFFER_NUMBERS`: 1 carbonate
+(NaHCO3 / Na2CO3) and 2 phosphate (NaH2PO4 / Na2HPO4). They number only the buffer
+systems in use and replace the template's codes. A buffer system in `buffers.CSV` without
+a code is rejected when planning, with the hint to add it.
 
 ## 4. Settings
 
@@ -227,6 +258,10 @@ The fixed numbers are module-level constants at the top of `planner.py`:
 | `DEFAULT_TOTAL_VOLUME_ML` | 8.5 | total volume suggested by the app |
 | `DEFAULT_ROBOT_SETTINGS` | see file | robot settings of a new experiment row |
 | `LED_CURRENTS_MA` | 0, 350, 500, 700, 1000 | the only LED currents the driver accepts; the table offers them as a dropdown, and the planner rejects any other value, because the device script stops on it |
+| `DEFAULT_NAME_PREFIX` | MRG-059 | name prefix suggested by the app; any prefix matching `NAME_PREFIX_PATTERN` (2–3 capital letters, hyphen, 3–4 digits) is accepted |
+| `OVERVIEW_BUFFER_NUMBERS` | carbonate 1, phosphate 2 | code of each buffer system in the overview's *buffer used* column |
+| `OVERVIEW_COLORS` | blue, red, green, … | plot colours of the experiments in the overview |
+| `OVERVIEW_PREPARED_ROWS` | 200 | rows of the overview formatted in advance |
 
 The buffer systems and their pKa values are in `buffers.CSV`, not in the code. Add a
 row there to use a new buffer; its acid and base must exist in `chemicals.CSV`.
@@ -250,9 +285,15 @@ by hand:
 - `experiments_design.csv` lists the water volume and rounds the concentrations to four
   significant digits, while the plan keeps the exact values,
 - names count up per letter pair, with `A` for a missing component,
+- a name prefix such as `AE-413` replaces `MRG-059` in the names and the stop entry,
+  and malformed prefixes are rejected,
 - `experiment.yml` parses as YAML, has the robot's key order and ends with the stop
-  entry.
+  entry,
+- the overview has the template's columns and fills them from the run (`none` for a
+  missing component, the buffer code, one colour per experiment), and the written
+  `overview.xlsx` reads back with the template's sheets, number formats, frozen panes
+  and *Active* dropdown.
 
 [tests/test_app.py](../tests/test_app.py) runs the app headless and checks that the
-default run is planned, that the µM/mM inputs arrive in M, and that an impossible run
-shows the error.
+default run is planned, that the µM/mM inputs arrive in M, that the name prefix renames
+the vials, and that an impossible run or a malformed prefix shows the error.

@@ -7,11 +7,16 @@ MIN_ADDITION_ML and MAX_ADDITION_ML of it; water fills up the rest. See docs/pla
 for the reasoning behind each step.
 """
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Font
+from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.datavalidation import DataValidation
 
 
 # --- Components -------------------------------------------------------------------
@@ -31,9 +36,10 @@ ENTERED_ROLES = ("photosensitizer", "catalyst", "sacrificial_oxidant")
 USABLE_PH_DISTANCE_FROM_PKA = 1.0
 
 # --- Sample names -----------------------------------------------------------------
-# A vial is named NAME_PREFIX + photosensitizer letter + catalyst letter + "-" + number,
-# e.g. MRG-059-BC-01.
-NAME_PREFIX = "MRG-059-"
+# A vial is named <prefix>-<photosensitizer letter><catalyst letter>-<number>, e.g.
+# MRG-059-BC-01. The prefix is set per run: 2–3 capital letters, a hyphen and 3–4 digits.
+NAME_PREFIX_PATTERN = r"[A-Z]{2,3}-[0-9]{3,4}"
+DEFAULT_NAME_PREFIX = "MRG-059"
 NAME_LETTERS = {
     "photosensitizer": {"Ru(bpy)3Cl2·6H2O": "B", "PDI-SO3": "C", "Ru(dcepy)2(bpy)(PF6)2": "D"},
     "catalyst": {"Co-POM": "B", "Ru(bda)(isoq)2": "C", "Ru(dpp)(pic)2(PF6)2": "D"},
@@ -112,8 +118,53 @@ ROBOT_FILE_UNITS = {
     "pre_reaction_baseline_time": "min",
     "post_reaction_baseline_time": "min",
 }
-# The robot stops at an entry with run "false"; it closes every experiment.yml.
-STOP_ENTRY_NAME = NAME_PREFIX + "stop"
+# The robot stops at an entry with run "false"; <name prefix>-stop closes every experiment.yml.
+STOP_ENTRY_SUFFIX = "-stop"
+
+# --- Overview workbook ------------------------------------------------------------
+# overview.xlsx copies the layout of the lab's overview_BA.xlsx, so its rows can go straight
+# into the existing overviews: per column the header, Excel number format and width.
+OVERVIEW_COLUMNS = {
+    "Experiment": ("@", 20),
+    "group": ("@", 24),
+    "File name O2": ("@", 30),
+    "Power output [W/m^2]": ("0.000", 14),
+    "Duty cycle [%]": ("0", 10),
+    "Frequency [Hz]": ("0.###", 11),
+    "Photosensitizer": ("@", 18),
+    "c(photosensitizer) [M]": ("0.00E+00", 14),
+    "Catalyst": ("@", 18),
+    "c(catalyst) [M]": ("0.00E+00", 14),
+    "c(Na2S2O8) [M]": ("0.00E+00", 13),
+    "pH [-]": ("0.00", 9),
+    "c(buffer) [M]": ("0.000", 12),
+    "buffer used": ("0", 10),
+    "Active": ("General", 9),
+    "color": ("@", 11),
+    "annotations": ("@", 40),
+}
+OVERVIEW_SHEET_TITLE = "Overview"
+# Fits two lines of wrapped header text, as in the template.
+OVERVIEW_HEADER_HEIGHT = 32.1
+# Rows below the header that get the number formats and the Active dropdown even when
+# empty, as in the template, so rows added by hand look the same.
+OVERVIEW_PREPARED_ROWS = 200
+# The O2 measurement of a vial is saved as results_<vial name>.csv.
+RESULTS_FILE_PREFIX = "results_"
+RESULTS_FILE_SUFFIX = ".csv"
+# Written instead of the chemical's name in a vial that does not contain it.
+OVERVIEW_NO_COMPONENT = "none"
+# Plot colour of each experiment (matplotlib colour names, like the template). The vials of
+# one experiment share a colour; the list starts over after the last one.
+OVERVIEW_COLORS = ("blue", "red", "green", "orange", "purple", "brown", "pink", "gray", "olive", "cyan")
+# Codes of the "buffer used" column, keyed by acid/base and listed on the "Buffer numbers"
+# sheet. They number only the buffer systems in use, replacing the codes of overview_BA.xlsx.
+OVERVIEW_BUFFER_NUMBERS = {
+    "NaHCO3/Na2CO3": 1,
+    "NaH2PO4/Na2HPO4": 2,
+}
+BUFFER_NUMBER_SHEET_TITLE = "Buffer numbers"
+BUFFER_NUMBER_COLUMN_WIDTH = 24
 
 
 class PlanningError(ValueError):
@@ -135,12 +186,15 @@ class RunPlan:
         The chemical used for each role.
     total_volume_ml : float
         Volume of the reaction mixture in every vial.
+    name_prefix : str
+        Prefix shared by all vial names of the run, e.g. MRG-059.
     """
 
     vials: pd.DataFrame
     stocks: pd.DataFrame
     chemical_by_role: dict
     total_volume_ml: float
+    name_prefix: str
 
 
 def load_chemicals(path):
@@ -181,7 +235,15 @@ def load_buffers(path):
 
 
 def plan_run(
-    experiments, replicates, chemical_by_role, chemicals, total_volume_ml, buffer_system, buffer_concentration, start_numbers=None
+    experiments,
+    replicates,
+    chemical_by_role,
+    chemicals,
+    total_volume_ml,
+    buffer_system,
+    buffer_concentration,
+    start_numbers=None,
+    name_prefix=DEFAULT_NAME_PREFIX,
 ):
     """Choose the stock solutions and pipetting volumes for one run.
 
@@ -205,6 +267,8 @@ def plan_run(
     start_numbers : dict, optional
         First running number of each letter pair, e.g. {"BC": 13, "BA": 5}; pairs not
         listed start at 1.
+    name_prefix : str, optional
+        Prefix of every vial name in the run: 2–3 capital letters, a hyphen and 3–4 digits.
 
     Returns
     -------
@@ -216,11 +280,14 @@ def plan_run(
         If the input is incomplete or a component cannot be pipetted within the limits.
     """
     validate_experiments(experiments, buffer_concentration)
+    validate_name_prefix(name_prefix)
     chemical_by_role = {**chemical_by_role, "buffer_acid": buffer_system["acid"], "buffer_base": buffer_system["base"]}
-    vials = experiments.loc[experiments.index.repeat(replicates)].reset_index(drop=True)
-    vials.insert(0, "name", build_vial_names(vials, chemical_by_role, start_numbers or {}))
+    # The experiment's index label stays with its vials, so the overview can colour them alike.
+    vials = experiments.loc[experiments.index.repeat(replicates)].reset_index(names="experiment")
+    vials.insert(0, "name", build_vial_names(vials, chemical_by_role, start_numbers or {}, name_prefix))
     vials["total_volume_ml"] = total_volume_ml
     vials["buffer_total_M"] = buffer_concentration
+    vials["buffer_number"] = look_up_buffer_number(buffer_system)
     vials["buffer_acid_M"], vials["buffer_base_M"] = split_buffer(vials["pH"], buffer_system["pKa"], buffer_concentration)
 
     stock_rows = []
@@ -241,7 +308,7 @@ def plan_run(
         )
 
     vials["volume_water"] = compute_water_volumes(vials, total_volume_ml)
-    return RunPlan(vials, pd.DataFrame(stock_rows), dict(chemical_by_role), total_volume_ml)
+    return RunPlan(vials, pd.DataFrame(stock_rows), dict(chemical_by_role), total_volume_ml, name_prefix)
 
 
 def validate_experiments(experiments, buffer_concentration):
@@ -273,6 +340,49 @@ def validate_experiments(experiments, buffer_concentration):
         raise PlanningError(f"The LED current must be one of {allowed} mA.")
 
 
+def validate_name_prefix(name_prefix):
+    """Reject a name prefix that is not 2–3 capital letters, a hyphen and 3–4 digits.
+
+    Parameters
+    ----------
+    name_prefix : str
+        The prefix passed to `plan_run`, e.g. MRG-059.
+
+    Raises
+    ------
+    PlanningError
+        If the prefix does not match NAME_PREFIX_PATTERN.
+    """
+    if not re.fullmatch(NAME_PREFIX_PATTERN, name_prefix):
+        raise PlanningError(
+            f"The name prefix '{name_prefix}' must be 2–3 capital letters, a hyphen and 3–4 digits, "
+            f"e.g. {DEFAULT_NAME_PREFIX}."
+        )
+
+
+def look_up_buffer_number(buffer_system):
+    """Code of the buffer system in the "buffer used" column of the overview.
+
+    Parameters
+    ----------
+    buffer_system : pd.Series
+        One row of the buffer table with `acid` and `base`.
+
+    Returns
+    -------
+    int
+
+    Raises
+    ------
+    PlanningError
+        If OVERVIEW_BUFFER_NUMBERS has no code for this acid/base pair.
+    """
+    pair = f"{buffer_system['acid']}/{buffer_system['base']}"
+    if pair not in OVERVIEW_BUFFER_NUMBERS:
+        raise PlanningError(f"No buffer number is defined for {pair}; add it to OVERVIEW_BUFFER_NUMBERS in planner.py.")
+    return OVERVIEW_BUFFER_NUMBERS[pair]
+
+
 def split_buffer(ph_values, pka, buffer_concentration):
     """Acid and base concentrations of an ideal buffer at the given pH.
 
@@ -296,7 +406,7 @@ def split_buffer(ph_values, pka, buffer_concentration):
     return buffer_concentration * (1 - base_fraction), buffer_concentration * base_fraction
 
 
-def build_vial_names(vials, chemical_by_role, start_numbers):
+def build_vial_names(vials, chemical_by_role, start_numbers, name_prefix):
     """Name every vial, counting up separately for each letter pair.
 
     Parameters
@@ -307,6 +417,8 @@ def build_vial_names(vials, chemical_by_role, start_numbers):
         Chemical name for every role.
     start_numbers : dict
         First number of each letter pair, e.g. {"BC": 13}; pairs not listed start at 1.
+    name_prefix : str
+        Prefix of the run, e.g. MRG-059.
 
     Returns
     -------
@@ -316,7 +428,7 @@ def build_vial_names(vials, chemical_by_role, start_numbers):
     letter_pairs = build_letter_pairs(vials, chemical_by_role)
     first_numbers = letter_pairs.map(start_numbers).fillna(1).astype(int)
     numbers = first_numbers + letter_pairs.groupby(letter_pairs).cumcount()
-    return NAME_PREFIX + letter_pairs + "-" + numbers.astype(str).str.zfill(NAME_NUMBER_DIGITS)
+    return name_prefix + "-" + letter_pairs + "-" + numbers.astype(str).str.zfill(NAME_NUMBER_DIGITS)
 
 
 def build_letter_pairs(experiments, chemical_by_role):
@@ -592,7 +704,7 @@ def format_robot_file(plan):
     str
     """
     entries = plan.vials.assign(run="true").to_dict("records")
-    stop_entry = {**entries[-1], "name": STOP_ENTRY_NAME, "run": "false"}
+    stop_entry = {**entries[-1], "name": plan.name_prefix + STOP_ENTRY_SUFFIX, "run": "false"}
     return "".join(format_robot_entry(entry) for entry in entries + [stop_entry])
 
 
@@ -622,8 +734,132 @@ def format_robot_entry(entry):
     return "\n".join(lines) + "\n"
 
 
+def build_overview(plan):
+    """Table of the run in the layout of the lab's overview workbook, as written to overview.xlsx.
+
+    One row per vial. Group and annotations stay empty for the user to fill in.
+
+    Parameters
+    ----------
+    plan : RunPlan
+
+    Returns
+    -------
+    pd.DataFrame
+        The columns of OVERVIEW_COLUMNS.
+    """
+    vials = plan.vials
+    experiment_numbers = pd.factorize(vials["experiment"])[0]
+    return pd.DataFrame(
+        {
+            "Experiment": vials["name"],
+            "group": None,
+            "File name O2": RESULTS_FILE_PREFIX + vials["name"] + RESULTS_FILE_SUFFIX,
+            # The template fills this column with the LED driver current in mA (350–1000).
+            "Power output [W/m^2]": vials["LED_driver_current_mA"],
+            "Duty cycle [%]": vials["Duty_Cycle"],
+            "Frequency [Hz]": vials["Frequency"],
+            "Photosensitizer": name_chemical_per_vial(plan, "photosensitizer"),
+            "c(photosensitizer) [M]": vials["photosensitizer_M"],
+            "Catalyst": name_chemical_per_vial(plan, "catalyst"),
+            "c(catalyst) [M]": vials["catalyst_M"],
+            "c(Na2S2O8) [M]": vials["sacrificial_oxidant_M"],
+            "pH [-]": vials["pH"],
+            "c(buffer) [M]": vials["buffer_total_M"],
+            "buffer used": vials["buffer_number"],
+            "Active": True,
+            "color": np.take(OVERVIEW_COLORS, experiment_numbers, mode="wrap"),
+            "annotations": None,
+        }
+    )
+
+
+def name_chemical_per_vial(plan, role):
+    """Chemical of one role for every vial, or OVERVIEW_NO_COMPONENT where it is left out.
+
+    Parameters
+    ----------
+    plan : RunPlan
+    role : str
+        "photosensitizer" or "catalyst".
+
+    Returns
+    -------
+    np.ndarray
+        One name per vial.
+    """
+    return np.where(plan.vials[f"{role}_M"] > 0, plan.chemical_by_role[role], OVERVIEW_NO_COMPONENT)
+
+
+def write_overview(overview, path):
+    """Save the overview as an Excel workbook laid out like the lab's overview_BA.xlsx.
+
+    Parameters
+    ----------
+    overview : pd.DataFrame
+        Table from `build_overview`.
+    path : Path
+    """
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = OVERVIEW_SHEET_TITLE
+    sheet.append(list(overview.columns))
+    # Records hold plain Python values, which openpyxl writes as they are (None stays empty).
+    for row in overview.to_dict("records"):
+        sheet.append(list(row.values()))
+
+    format_overview_sheet(sheet, max(OVERVIEW_PREPARED_ROWS, len(overview)))
+    add_buffer_number_sheet(workbook)
+    workbook.save(path)
+
+
+def format_overview_sheet(sheet, prepared_rows):
+    """Apply the template's header style, column widths, number formats and Active dropdown.
+
+    Parameters
+    ----------
+    sheet : openpyxl.worksheet.worksheet.Worksheet
+        Overview sheet with the header in the first row.
+    prepared_rows : int
+        Rows below the header that get the number formats and the dropdown.
+    """
+    for column_number, (number_format, width) in enumerate(OVERVIEW_COLUMNS.values(), start=1):
+        header = sheet.cell(row=1, column=column_number)
+        header.font = Font(bold=True)
+        header.alignment = Alignment(wrap_text=True, vertical="center")
+        sheet.column_dimensions[get_column_letter(column_number)].width = width
+        for row_number in range(2, prepared_rows + 2):
+            sheet.cell(row=row_number, column=column_number).number_format = number_format
+
+    sheet.row_dimensions[1].height = OVERVIEW_HEADER_HEIGHT
+    # The header row and the vial names stay visible while scrolling.
+    sheet.freeze_panes = "B2"
+
+    active_column = get_column_letter(list(OVERVIEW_COLUMNS).index("Active") + 1)
+    active_dropdown = DataValidation(type="list", formula1='"TRUE,FALSE"')
+    active_dropdown.add(f"{active_column}2:{active_column}{prepared_rows + 1}")
+    sheet.add_data_validation(active_dropdown)
+
+
+def add_buffer_number_sheet(workbook):
+    """Add the sheet that explains the codes of the "buffer used" column, as in the template.
+
+    Parameters
+    ----------
+    workbook : openpyxl.Workbook
+    """
+    sheet = workbook.create_sheet(BUFFER_NUMBER_SHEET_TITLE)
+    sheet.append(["buffer", "number"])
+    for buffer, number in OVERVIEW_BUFFER_NUMBERS.items():
+        sheet.append([buffer, number])
+
+    for header in sheet[1]:
+        header.font = Font(bold=True)
+    sheet.column_dimensions["A"].width = BUFFER_NUMBER_COLUMN_WIDTH
+
+
 def write_run_files(plan, directory):
-    """Write experiments_design.csv, stock_solutions.csv and experiment.yml.
+    """Write experiments_design.csv, stock_solutions.csv, experiment.yml and overview.xlsx.
 
     Parameters
     ----------
@@ -636,6 +872,7 @@ def write_run_files(plan, directory):
     build_experiment_design(plan).to_csv(directory / "experiments_design.csv", sep=";", index=False)
     plan.stocks.to_csv(directory / "stock_solutions.csv", sep=";", index=False)
     (directory / "experiment.yml").write_text(format_robot_file(plan), encoding="utf-8")
+    write_overview(build_overview(plan), directory / "overview.xlsx")
 
 
 def test_function():
@@ -662,6 +899,7 @@ def test_function():
     volume_columns = ["name", "pH"] + [f"volume_{role}" for role in ROLE_CATEGORIES] + ["volume_water"]
     print(plan.vials[volume_columns].to_string(index=False), end="\n\n")
     print(plan.stocks.drop(columns="Instruction").to_string(index=False), end="\n\n")
+    print(build_overview(plan).to_string(index=False), end="\n\n")
     print(format_robot_file(plan))
 
 

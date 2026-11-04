@@ -11,6 +11,11 @@ def find_number_input(app, label):
     return next(widget for widget in app.number_input if widget.label.startswith(label))
 
 
+def find_text_input(app, label):
+    """The text input labelled `label`."""
+    return next(widget for widget in app.text_input if widget.label == label)
+
+
 def test_default_run_is_planned():
     app = AppTest.from_file(APP_FILE).run()
 
@@ -48,6 +53,21 @@ def test_start_number_renames_the_vials():
     find_number_input(app, "Start MRG-059-BC-").set_value(13).run()
 
     assert app.dataframe[1].value["name"].tolist()[:2] == ["MRG-059-BC-13", "MRG-059-BC-14"]
+
+
+def test_name_prefix_renames_the_vials():
+    app = AppTest.from_file(APP_FILE).run()
+    find_text_input(app, "Name prefix").set_value("AE-413").run()
+
+    assert app.dataframe[1].value["name"].tolist()[:2] == ["AE-413-BC-01", "AE-413-BC-02"]
+    assert find_number_input(app, "Start AE-413-BC-")
+
+
+def test_malformed_name_prefix_shows_an_error():
+    app = AppTest.from_file(APP_FILE).run()
+    find_text_input(app, "Name prefix").set_value("MRG059").run()
+
+    assert "name prefix" in app.error[0].value
 
 
 def test_impossible_run_shows_an_error():

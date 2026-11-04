@@ -26,7 +26,8 @@ The app opens in the browser.
 2. **Choose the buffer.** Pick the buffer system (from `buffers.CSV`) and its total
    concentration in mM. Both apply to the whole run. Below the selection the app shows
    the pKa, where it comes from, and the pH range in which the calculation is usable.
-3. **Set the total volume** per vial (default 8.5 mL) and the **vials per experiment**.
+3. **Set the total volume** per vial (default 8.5 mL), the **vials per experiment** and
+   the **name prefix** of the run (default `MRG-059`, see *Sample names*).
 4. **Fill the experiment table.** Use one row per experiment, with the final
    concentrations (photosensitizer and catalyst in µM, sacrificial oxidant in mM), the
    pH and the robot settings for that experiment. The buffer acid and base amounts are
@@ -53,11 +54,14 @@ The app opens in the browser.
 | `buffers.CSV` | buffer systems: acid, base, pKa and where it comes from. Edit it when a buffer system is added or a pKa is measured |
 | `runs/…/experiments_design.csv` | one row per vial: name, total volume, water volume, target concentrations in M (4 significant digits), total buffer, pH |
 | `runs/…/stock_solutions.csv` | per stock: concentration, volume to prepare, mass to weigh in, amount in mmol, instruction |
-| `runs/…/experiment.yml` | robot input: one entry per vial plus the closing `MRG-059-stop` entry |
+| `runs/…/experiment.yml` | robot input: one entry per vial plus the closing `<name prefix>-stop` entry |
+| `runs/…/overview.xlsx` | one row per vial in the layout of the lab's overview workbook (`overview_BA.xlsx`): name, `results_<name>.csv`, light settings, chemicals, concentrations, pH, buffer code, colour. *group* and *annotations* stay empty |
 
 ## Sample names
 
-`MRG-059-` + photosensitizer letter + catalyst letter + `-` + two-digit number, e.g. `MRG-059-BC-01`.
+Name prefix + `-` + photosensitizer letter + catalyst letter + `-` + two-digit number,
+e.g. `MRG-059-BC-01`. The name prefix is set per run in the app: 2–3 capital letters, a
+hyphen and 3–4 digits, e.g. `MRG-059` or `AE-413`.
 
 | Letter | Photosensitizer (1st) | Catalyst (2nd) |
 |---|---|---|
@@ -98,6 +102,8 @@ BA at 5 you get `BC-13, BC-14, BA-05, BA-06`.
 | `Some cells of the experiment table are empty.` | a cell was cleared | fill it in, or enter 0 |
 | `The LED current must be one of 0, 350, 500, 700, 1000 mA.` | a current the LED driver cannot set | choose one of these values |
 | `No name letter is defined for …` | a new photosensitizer or catalyst in `chemicals.CSV` | add its letter to `NAME_LETTERS` in `planner.py` |
+| `The name prefix '…' must be 2–3 capital letters, a hyphen and 3–4 digits…` | a typo in the name prefix, e.g. `MRG059` or `mrg-059` | correct it to the form `MRG-059` |
+| `No buffer number is defined for …` | a new buffer system in `buffers.CSV` has no code for the overview | add it to `OVERVIEW_BUFFER_NUMBERS` in `planner.py` |
 
 ## Tests
 

@@ -8,6 +8,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `overview.xlsx` in every saved run: one row per vial in the layout of the lab's
+  `overview_BA.xlsx` (same headers, column widths, number formats, frozen panes, `Active`
+  TRUE/FALSE dropdown and a *Buffer numbers* sheet), so rows can be copied into the
+  existing overviews. `build_overview` and `write_overview` in `planner.py`.
+  - *File name O2* is `results_<vial name>.csv`; *group* and *annotations* stay empty.
+  - *Power output [W/m^2]* holds the LED driver current in mA, as the template does.
+  - A component left out is listed as `none`.
+  - *color* gives each experiment a matplotlib colour name (`OVERVIEW_COLORS`); its vials
+    share it.
+  - *buffer used* numbers the buffer systems in use (`OVERVIEW_BUFFER_NUMBERS`):
+    1 carbonate (NaHCO3 / Na2CO3), 2 phosphate (NaH2PO4 / Na2HPO4). They replace the
+    template's codes. A buffer system without a code is rejected with a `PlanningError`.
+  - New dependency `openpyxl`.
+- Name prefix per run. The app takes the prefix of the vial names (default `MRG-059`),
+  which must be 2–3 capital letters, a hyphen and 3–4 digits (`NAME_PREFIX_PATTERN`);
+  `plan_run` takes it as `name_prefix` and rejects other forms. The letter pair and the
+  running number follow as before, e.g. `AE-413-BC-01`.
+
 - Buffer from pH. The run now takes a buffer system and a total buffer concentration,
   and each experiment a pH. Buffer acid and base concentrations follow from
   Henderson–Hasselbalch for an ideal buffer (`split_buffer` in `planner.py`). They keep
@@ -41,6 +59,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   vial.
 
 ### Changed
+
+- `NAME_PREFIX` is replaced by `DEFAULT_NAME_PREFIX` (`"MRG-059"`, without the trailing
+  hyphen), and `STOP_ENTRY_NAME` by `STOP_ENTRY_SUFFIX`: the closing entry of
+  `experiment.yml` is now `<name prefix>-stop`. `RunPlan` gains `name_prefix`, and
+  `plan.vials` the columns `experiment` (index label of the experiment row) and
+  `buffer_number`.
 
 - The concentrations in `experiments_design.csv` are rounded to four significant digits
   (`DOCUMENTED_SIGNIFICANT_DIGITS`) to keep the file readable. The calculation and

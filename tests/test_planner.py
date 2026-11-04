@@ -1,4 +1,5 @@
 import numpy as np
+import openpyxl
 import pandas as pd
 import pytest
 import yaml
@@ -9,15 +10,17 @@ from planner import (
     MIN_ADDITION_ML,
     MIN_STOCK_VOLUME_ML,
     MIN_WEIGHED_MASS_MG,
+    OVERVIEW_PREPARED_ROWS,
     ROBOT_FILE_KEYS,
     STOCK_SAFETY_FACTOR,
-    STOP_ENTRY_NAME,
     VOLUME_DECIMALS,
     PlanningError,
     build_experiment_design,
+    build_overview,
     format_robot_file,
     load_buffers,
     load_chemicals,
+    look_up_buffer_number,
     plan_run,
     split_buffer,
     write_run_files,
@@ -223,6 +226,32 @@ def test_numbers_beyond_two_digits_are_not_cut(chemicals):
     assert run_plan.vials["name"].tolist() == ["MRG-059-BC-99", "MRG-059-BC-100"]
 
 
+@pytest.mark.parametrize("name_prefix", ["AE-413", "MRG-1059"])
+def test_name_prefix_replaces_the_default(chemicals, name_prefix):
+    experiments = build_experiments([5e-5, 5e-5], [1e-5, 0.0])
+    run_plan = plan_run(
+        experiments, 1, CHEMICAL_BY_ROLE, chemicals, TOTAL_VOLUME_ML, BUFFER_SYSTEM, BUFFER_CONCENTRATION, name_prefix=name_prefix
+    )
+
+    assert run_plan.vials["name"].tolist() == [f"{name_prefix}-BC-01", f"{name_prefix}-BA-01"]
+    assert yaml.safe_load(format_robot_file(run_plan))[-1]["name"] == f"{name_prefix}-stop"
+
+
+@pytest.mark.parametrize("name_prefix", ["MRG059", "M-059", "MRGX-059", "MRG-59", "MRG-10599", "mrg-059", ""])
+def test_malformed_name_prefix_is_rejected(chemicals, name_prefix):
+    with pytest.raises(PlanningError, match="name prefix"):
+        plan_run(
+            build_experiments([5e-5], [1e-5]),
+            1,
+            CHEMICAL_BY_ROLE,
+            chemicals,
+            TOTAL_VOLUME_ML,
+            BUFFER_SYSTEM,
+            BUFFER_CONCENTRATION,
+            name_prefix=name_prefix,
+        )
+
+
 def test_component_left_out_gets_no_volume(chemicals):
     run_plan = plan(build_experiments([5e-5, 5e-5], [1e-5, 0.0]), chemicals)
 
@@ -298,11 +327,108 @@ def test_robot_file_has_one_entry_per_vial_and_a_stop_entry(chemicals):
     run_plan = plan(experiments, chemicals, replicates=2)
     entries = yaml.safe_load(format_robot_file(run_plan))
 
-    assert [entry["name"] for entry in entries] == run_plan.vials["name"].tolist() + [STOP_ENTRY_NAME]
+    assert [entry["name"] for entry in entries] == run_plan.vials["name"].tolist() + ["MRG-059-stop"]
     assert [entry["run"] for entry in entries] == ["true"] * 4 + ["false"]
     assert [entry["voltage"] for entry in entries] == [0.18, 0.18, 0.2, 0.2, 0.2]
     assert all(list(entry) == list(ROBOT_FILE_KEYS) for entry in entries)
     assert entries[0]["volume_buffer_base"] == run_plan.vials.loc[0, "volume_buffer_base"]
+
+
+def test_overview_has_the_template_columns(chemicals):
+    overview = build_overview(plan(build_experiments([5e-5], [1e-5]), chemicals, replicates=2))
+
+    assert overview.columns.tolist() == [
+        "Experiment",
+        "group",
+        "File name O2",
+        "Power output [W/m^2]",
+        "Duty cycle [%]",
+        "Frequency [Hz]",
+        "Photosensitizer",
+        "c(photosensitizer) [M]",
+        "Catalyst",
+        "c(catalyst) [M]",
+        "c(Na2S2O8) [M]",
+        "pH [-]",
+        "c(buffer) [M]",
+        "buffer used",
+        "Active",
+        "color",
+        "annotations",
+    ]
+    assert len(overview) == 2
+
+
+def test_overview_fills_in_the_run_data(chemicals):
+    experiments = build_experiments([5e-5, 5e-5], [1e-5, 0.0], ph=[7.0, 7.2]).assign(
+        LED_driver_current_mA=[350, 1000], Duty_Cycle=[100, 50], Frequency=[1, 10]
+    )
+    control = build_overview(plan(experiments, chemicals)).to_dict("records")[1]
+
+    # The test buffer is NaH2PO4 / Na2HPO4, code 2; the LED current goes into "Power output".
+    assert control == {
+        "Experiment": "MRG-059-BA-01",
+        "group": None,
+        "File name O2": "results_MRG-059-BA-01.csv",
+        "Power output [W/m^2]": 1000,
+        "Duty cycle [%]": 50,
+        "Frequency [Hz]": 10,
+        "Photosensitizer": "Ru(bpy)3Cl2·6H2O",
+        "c(photosensitizer) [M]": 5e-5,
+        "Catalyst": "none",
+        "c(catalyst) [M]": 0.0,
+        "c(Na2S2O8) [M]": 0.01,
+        "pH [-]": 7.2,
+        "c(buffer) [M]": 0.01,
+        "buffer used": 2,
+        "Active": True,
+        "color": "red",
+        "annotations": None,
+    }
+
+
+def test_vials_of_one_experiment_share_a_color(chemicals):
+    overview = build_overview(plan(build_experiments([5e-5] * 3, [1e-5] * 3), chemicals, replicates=2))
+
+    assert overview["color"].tolist() == ["blue", "blue", "red", "red", "green", "green"]
+
+
+def test_colors_start_over_after_the_last_one(chemicals):
+    # Ten colours: the eleventh experiment gets the first one again.
+    overview = build_overview(plan(build_experiments([5e-5] * 11, [1e-5] * 11), chemicals))
+
+    assert overview["color"].iloc[10] == overview["color"].iloc[0] == "blue"
+
+
+def test_carbonate_is_buffer_1_and_phosphate_buffer_2():
+    assert look_up_buffer_number(pd.Series({"acid": "NaHCO3", "base": "Na2CO3"})) == 1
+    assert look_up_buffer_number(pd.Series({"acid": "NaH2PO4", "base": "Na2HPO4"})) == 2
+
+
+def test_buffer_without_number_is_rejected(chemicals):
+    buffer_system = pd.Series({"acid": "NaH2PO4", "base": "NaOH", "pKa": 7.0})
+
+    with pytest.raises(PlanningError, match="No buffer number is defined for NaH2PO4/NaOH"):
+        plan_run(build_experiments([5e-5], [1e-5]), 1, CHEMICAL_BY_ROLE, chemicals, TOTAL_VOLUME_ML, buffer_system, BUFFER_CONCENTRATION)
+
+
+def test_written_overview_has_the_template_layout(chemicals, tmp_path):
+    run_plan = plan(build_experiments([5e-5], [1e-5]), chemicals, replicates=2)
+    write_run_files(run_plan, tmp_path / "run")
+    path = tmp_path / "run" / "overview.xlsx"
+
+    sheets = pd.read_excel(path, sheet_name=None)
+    assert list(sheets) == ["Overview", "Buffer numbers"]
+    assert sheets["Overview"]["Experiment"].tolist() == ["MRG-059-BC-01", "MRG-059-BC-02"]
+    assert sheets["Overview"]["group"].isna().all()
+    assert sheets["Buffer numbers"].to_dict("list") == {"buffer": ["NaHCO3/Na2CO3", "NaH2PO4/Na2HPO4"], "number": [1, 2]}
+
+    sheet = openpyxl.load_workbook(path)["Overview"]
+    assert sheet.freeze_panes == "B2"
+    assert sheet["H2"].number_format == "0.00E+00"
+    # Empty rows below the vials are prepared like the template, down to row 201.
+    assert sheet.cell(row=OVERVIEW_PREPARED_ROWS + 1, column=1).number_format == "@"
+    assert [str(rule.sqref) for rule in sheet.data_validations.dataValidation] == ["O2:O201"]
 
 
 def test_written_files_read_back(chemicals, tmp_path):
