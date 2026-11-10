@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `experiments_design.csv` gains the light settings of each vial's experiment after `pH`:
+  `LED_driver_current_mA`, `Duty_Cycle_%` and `Frequency_Hz`.
 - `overview.xlsx` in every saved run: one row per vial in the layout of the lab's
   `overview_BA.xlsx` (same headers, column widths, number formats, frozen panes, `Active`
   TRUE/FALSE dropdown and a *Buffer numbers* sheet), so rows can be copied into the
@@ -59,6 +61,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   vial.
 
 ### Changed
+
+- Replicates share their experiment's number. Vial names gain a replicate number:
+  `<prefix>-<letters>-<experiment number>-<replicate>`, e.g. `MRG-059-BC-01-2`. The
+  experiment number counts per letter pair in table order (the start numbers now set the
+  number of the first experiment); the replicate number counts the experiment's vials in
+  run order. Previously every vial had its own running number in run order. This also
+  changes the names in `experiment.yml`, `overview.xlsx` and the *File name O2* column.
+
+- The vials run in mirrored blocks instead of grouped by experiment: 1 2 3 4 4 3 2 1
+  instead of 1 1 2 2 3 3 4 4 (`order_vials` in `planner.py`). With an even number of
+  vials per experiment, every experiment has the same average position in the run, so a
+  drift over the run (e.g. leakage) no longer fakes a trend between experiments. All
+  output files follow this order. The running numbers of the names follow it too, so
+  duplicates no longer get consecutive numbers (four BC experiments in duplicate:
+  experiment 1 is `BC-01` and `BC-08`). Section 2.1 of `docs/planning.md` explains why.
 
 - `NAME_PREFIX` is replaced by `DEFAULT_NAME_PREFIX` (`"MRG-059"`, without the trailing
   hyphen), and `STOP_ENTRY_NAME` by `STOP_ENTRY_SUFFIX`: the closing entry of

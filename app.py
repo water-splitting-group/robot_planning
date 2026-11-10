@@ -171,7 +171,7 @@ def convert_to_molar(experiments):
 
 
 def select_start_numbers(experiments, chemical_by_role, name_prefix):
-    """Let the user set the first running number of every letter pair in the run.
+    """Let the user set the number of the first experiment of every letter pair in the run.
 
     The inputs are keyed by letter pair, so a value survives as long as its pair stays in
     the table.
@@ -195,7 +195,7 @@ def select_start_numbers(experiments, chemical_by_role, name_prefix):
         return {}
 
     st.subheader("Numbering")
-    st.caption("First number of each name series in this run.")
+    st.caption("Number of the first experiment of each name series in this run.")
     return {
         pair: column.number_input(f"Start {name_prefix}-{pair}-", min_value=1, value=1, key=f"start_number_{pair}")
         for column, pair in zip(st.columns(len(letter_pairs)), letter_pairs)
@@ -211,6 +211,10 @@ def show_plan(plan):
     """
     volume_columns = ["name", "pH"] + [f"volume_{role}" for role in ROLE_CATEGORIES] + ["volume_water"]
     st.subheader("Pipetting volumes [mL]")
+    st.caption(
+        "In the order the robot runs them: the experiments in table order, then in reverse (1 2 3 4 4 3 2 1), "
+        "so a drift over the run affects all experiments alike."
+    )
     st.dataframe(plan.vials[volume_columns], hide_index=True)
 
     st.subheader("Stock solutions")

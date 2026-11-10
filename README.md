@@ -52,15 +52,16 @@ The app opens in the browser.
 |---|---|
 | `chemicals.CSV` | chemicals database: category, molar mass, solubility. Edit it when a chemical is added |
 | `buffers.CSV` | buffer systems: acid, base, pKa and where it comes from. Edit it when a buffer system is added or a pKa is measured |
-| `runs/…/experiments_design.csv` | one row per vial: name, total volume, water volume, target concentrations in M (4 significant digits), total buffer, pH |
+| `runs/…/experiments_design.csv` | one row per vial: name, total volume, water volume, target concentrations in M (4 significant digits), total buffer, pH, LED current (mA), duty cycle (%), frequency (Hz) |
 | `runs/…/stock_solutions.csv` | per stock: concentration, volume to prepare, mass to weigh in, amount in mmol, instruction |
 | `runs/…/experiment.yml` | robot input: one entry per vial plus the closing `<name prefix>-stop` entry |
 | `runs/…/overview.xlsx` | one row per vial in the layout of the lab's overview workbook (`overview_BA.xlsx`): name, `results_<name>.csv`, light settings, chemicals, concentrations, pH, buffer code, colour. *group* and *annotations* stay empty |
 
 ## Sample names
 
-Name prefix + `-` + photosensitizer letter + catalyst letter + `-` + two-digit number,
-e.g. `MRG-059-BC-01`. The name prefix is set per run in the app: 2–3 capital letters, a
+Name prefix + `-` + photosensitizer letter + catalyst letter + `-` + two-digit experiment
+number + `-` + replicate number, e.g. `MRG-059-BC-01-2`. The name prefix is set per run
+in the app: 2–3 capital letters, a
 hyphen and 3–4 digits, e.g. `MRG-059` or `AE-413`.
 
 | Letter | Photosensitizer (1st) | Catalyst (2nd) |
@@ -70,12 +71,17 @@ hyphen and 3–4 digits, e.g. `MRG-059` or `AE-413`.
 | C | PDI-SO3 | Ru(bda)(isoq)2 |
 | D | Ru(dcepy)2(bpy)(PF6)2 | Ru(dpp)(pic)2(PF6)2 |
 
-The number counts separately for each letter pair. Below the experiment table you set
-the start number of each letter pair in the run (default 1). With BC starting at 13 and
-BA at 5 you get `BC-13, BC-14, BA-05, BA-06`.
+The experiment number counts separately for each letter pair, in table order; all vials
+of one experiment share it. The replicate number (`-1`, `-2`, …) tells them apart in the
+order the robot runs them (see *Rules*). Below the experiment table you set the start
+number of each letter pair in the run (default 1). With BC starting at 13 and BA at 5,
+one BC and one BA experiment in duplicate give `BC-13-1, BA-05-1, BA-05-2, BC-13-2`.
 
 ## Rules the planner follows
 
+- The vials run in **mirrored blocks**: 1 2 3 4 4 3 2 1 for four experiments in
+  duplicate. Every experiment then has the same average position in the run, so a drift
+  such as leakage growing over the run does not fake a trend between experiments.
 - Each component comes from **one stock solution** for the whole run.
 - Each vial gets **0.2–0.85 mL** of every stock it contains. The vial with the highest
   concentration gets 0.85 mL. Water fills up the rest.

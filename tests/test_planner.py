@@ -188,17 +188,40 @@ def test_empty_cell_is_rejected(chemicals):
         plan(build_experiments([5e-5, None], [1e-5, 1e-5]), chemicals)
 
 
-def test_names_count_up_per_letter_pair(chemicals):
-    run_plan = plan(build_experiments([5e-5, 5e-5, 0.0], [1e-5, 0.0, 1e-5]), chemicals, replicates=2)
+def test_replicates_share_the_experiment_number(chemicals):
+    run_plan = plan(build_experiments([5e-5, 1e-4, 5e-5], [1e-5, 1e-5, 0.0]), chemicals, replicates=2)
 
+    # Experiments are numbered per letter pair in table order; the replicate number
+    # follows the mirrored run order.
     assert run_plan.vials["name"].tolist() == [
-        "MRG-059-BC-01",
-        "MRG-059-BC-02",
-        "MRG-059-BA-01",
-        "MRG-059-BA-02",
-        "MRG-059-AC-01",
-        "MRG-059-AC-02",
+        "MRG-059-BC-01-1",
+        "MRG-059-BC-02-1",
+        "MRG-059-BA-01-1",
+        "MRG-059-BA-01-2",
+        "MRG-059-BC-02-2",
+        "MRG-059-BC-01-2",
     ]
+
+
+@pytest.mark.parametrize(
+    ("replicates", "expected_order"),
+    [(1, [0, 1, 2]), (2, [0, 1, 2, 2, 1, 0]), (3, [0, 1, 2, 2, 1, 0, 0, 1, 2])],
+)
+def test_vials_run_in_mirrored_blocks(chemicals, replicates, expected_order):
+    catalyst = [4e-6, 6e-6, 8e-6]
+    run_plan = plan(build_experiments([5e-5] * 3, catalyst), chemicals, replicates=replicates)
+
+    assert run_plan.vials["experiment"].tolist() == expected_order
+    # Every vial keeps the concentrations of its own experiment.
+    assert run_plan.vials["catalyst_M"].tolist() == [catalyst[label] for label in expected_order]
+
+
+def test_duplicates_give_every_experiment_the_same_average_position(chemicals):
+    # Four experiments in duplicate, as in a typical run: positions 0–7, average 3.5 each.
+    run_plan = plan(build_experiments([5e-5] * 4, [1e-5] * 4), chemicals, replicates=2)
+    positions = run_plan.vials.index.to_series()
+
+    assert positions.groupby(run_plan.vials["experiment"]).mean().tolist() == [3.5] * 4
 
 
 def test_each_letter_pair_starts_at_its_own_number(chemicals):
@@ -209,21 +232,28 @@ def test_each_letter_pair_starts_at_its_own_number(chemicals):
 
     # AC is not listed and starts at 1.
     assert run_plan.vials["name"].tolist() == [
-        "MRG-059-BC-13",
-        "MRG-059-BC-14",
-        "MRG-059-BA-05",
-        "MRG-059-BA-06",
-        "MRG-059-AC-01",
-        "MRG-059-AC-02",
+        "MRG-059-BC-13-1",
+        "MRG-059-BA-05-1",
+        "MRG-059-AC-01-1",
+        "MRG-059-AC-01-2",
+        "MRG-059-BA-05-2",
+        "MRG-059-BC-13-2",
     ]
 
 
 def test_numbers_beyond_two_digits_are_not_cut(chemicals):
     run_plan = plan_run(
-        build_experiments([5e-5], [1e-5]), 2, CHEMICAL_BY_ROLE, chemicals, TOTAL_VOLUME_ML, BUFFER_SYSTEM, BUFFER_CONCENTRATION, {"BC": 99}
+        build_experiments([5e-5, 1e-4], [1e-5, 1e-5]),
+        1,
+        CHEMICAL_BY_ROLE,
+        chemicals,
+        TOTAL_VOLUME_ML,
+        BUFFER_SYSTEM,
+        BUFFER_CONCENTRATION,
+        {"BC": 99},
     )
 
-    assert run_plan.vials["name"].tolist() == ["MRG-059-BC-99", "MRG-059-BC-100"]
+    assert run_plan.vials["name"].tolist() == ["MRG-059-BC-99-1", "MRG-059-BC-100-1"]
 
 
 @pytest.mark.parametrize("name_prefix", ["AE-413", "MRG-1059"])
@@ -233,7 +263,7 @@ def test_name_prefix_replaces_the_default(chemicals, name_prefix):
         experiments, 1, CHEMICAL_BY_ROLE, chemicals, TOTAL_VOLUME_ML, BUFFER_SYSTEM, BUFFER_CONCENTRATION, name_prefix=name_prefix
     )
 
-    assert run_plan.vials["name"].tolist() == [f"{name_prefix}-BC-01", f"{name_prefix}-BA-01"]
+    assert run_plan.vials["name"].tolist() == [f"{name_prefix}-BC-01-1", f"{name_prefix}-BA-01-1"]
     assert yaml.safe_load(format_robot_file(run_plan))[-1]["name"] == f"{name_prefix}-stop"
 
 
@@ -294,8 +324,11 @@ def test_stock_lists_the_amount_weighed_in(chemicals):
     assert stock["Amount_mmol"] == pytest.approx(1e-3)
 
 
-def test_experiment_design_lists_chemicals_by_name_with_water_buffer_and_ph(chemicals):
-    run_plan = plan(build_experiments([5e-5], [1e-5], ph=7.3), chemicals, replicates=2)
+def test_experiment_design_lists_chemicals_by_name_with_water_buffer_ph_and_light(chemicals):
+    experiments = build_experiments([5e-5], [1e-5], ph=7.3).assign(
+        LED_driver_current_mA=500, Duty_Cycle=50, Frequency=10
+    )
+    run_plan = plan(experiments, chemicals, replicates=2)
     design = build_experiment_design(run_plan)
 
     chemical_columns = [f"{chemical}_M" for chemical in [*CHEMICAL_BY_ROLE.values(), "NaH2PO4", "Na2HPO4"]]
@@ -306,10 +339,14 @@ def test_experiment_design_lists_chemicals_by_name_with_water_buffer_and_ph(chem
         *chemical_columns,
         "buffer_total_M",
         "pH",
+        "LED_driver_current_mA",
+        "Duty_Cycle_%",
+        "Frequency_Hz",
     ]
     assert design["total_volume_µL"].tolist() == [8500.0, 8500.0]
     assert design["water_volume_mL"].tolist() == run_plan.vials["volume_water"].tolist()
     assert design["pH"].tolist() == [7.3, 7.3]
+    assert design[["LED_driver_current_mA", "Duty_Cycle_%", "Frequency_Hz"]].values.tolist() == [[500, 50, 10]] * 2
 
 
 def test_experiment_design_rounds_concentrations_but_the_plan_keeps_them_exact(chemicals):
@@ -329,7 +366,8 @@ def test_robot_file_has_one_entry_per_vial_and_a_stop_entry(chemicals):
 
     assert [entry["name"] for entry in entries] == run_plan.vials["name"].tolist() + ["MRG-059-stop"]
     assert [entry["run"] for entry in entries] == ["true"] * 4 + ["false"]
-    assert [entry["voltage"] for entry in entries] == [0.18, 0.18, 0.2, 0.2, 0.2]
+    # Mirrored order; the stop entry repeats the last vial, which belongs to experiment 1.
+    assert [entry["voltage"] for entry in entries] == [0.18, 0.2, 0.2, 0.18, 0.18]
     assert all(list(entry) == list(ROBOT_FILE_KEYS) for entry in entries)
     assert entries[0]["volume_buffer_base"] == run_plan.vials.loc[0, "volume_buffer_base"]
 
@@ -367,9 +405,9 @@ def test_overview_fills_in_the_run_data(chemicals):
 
     # The test buffer is NaH2PO4 / Na2HPO4, code 2; the LED current goes into "Power output".
     assert control == {
-        "Experiment": "MRG-059-BA-01",
+        "Experiment": "MRG-059-BA-01-1",
         "group": None,
-        "File name O2": "results_MRG-059-BA-01.csv",
+        "File name O2": "results_MRG-059-BA-01-1.csv",
         "Power output [W/m^2]": 1000,
         "Duty cycle [%]": 50,
         "Frequency [Hz]": 10,
@@ -390,7 +428,7 @@ def test_overview_fills_in_the_run_data(chemicals):
 def test_vials_of_one_experiment_share_a_color(chemicals):
     overview = build_overview(plan(build_experiments([5e-5] * 3, [1e-5] * 3), chemicals, replicates=2))
 
-    assert overview["color"].tolist() == ["blue", "blue", "red", "red", "green", "green"]
+    assert overview["color"].tolist() == ["blue", "red", "green", "green", "red", "blue"]
 
 
 def test_colors_start_over_after_the_last_one(chemicals):
@@ -419,7 +457,7 @@ def test_written_overview_has_the_template_layout(chemicals, tmp_path):
 
     sheets = pd.read_excel(path, sheet_name=None)
     assert list(sheets) == ["Overview", "Buffer numbers"]
-    assert sheets["Overview"]["Experiment"].tolist() == ["MRG-059-BC-01", "MRG-059-BC-02"]
+    assert sheets["Overview"]["Experiment"].tolist() == ["MRG-059-BC-01-1", "MRG-059-BC-01-2"]
     assert sheets["Overview"]["group"].isna().all()
     assert sheets["Buffer numbers"].to_dict("list") == {"buffer": ["NaHCO3/Na2CO3", "NaH2PO4/Na2HPO4"], "number": [1, 2]}
 
@@ -437,7 +475,7 @@ def test_written_files_read_back(chemicals, tmp_path):
 
     design = pd.read_csv(tmp_path / "run" / "experiments_design.csv", sep=";")
     stocks = pd.read_csv(tmp_path / "run" / "stock_solutions.csv", sep=";")
-    assert design["Experiment"].tolist() == ["MRG-059-BC-01", "MRG-059-BC-02"]
+    assert design["Experiment"].tolist() == ["MRG-059-BC-01-1", "MRG-059-BC-01-2"]
     assert stocks["Chemical"].tolist() == [*CHEMICAL_BY_ROLE.values(), "NaH2PO4", "Na2HPO4"]
 
 

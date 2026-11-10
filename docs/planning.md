@@ -34,11 +34,40 @@ Internally, and in the output files, everything is in M.
 
 Every experiment (one row of the table in the app) is repeated as often as
 *Vials per experiment* says. With four experiments and two vials each you get eight
-vials, in the order experiment 1, experiment 1, experiment 2, experiment 2, …
+vials.
+
+The robot runs the vials in **mirrored blocks**: one vial of every experiment in table
+order, then one of every experiment in reverse, and so on (`order_vials`):
+
+    1 2 3 4 4 3 2 1          two vials per experiment
+    1 2 3 4 4 3 2 1 1 2 3 4  three vials per experiment
+
+The reason is drift over the run. Leakage, for example, tends to grow from the first
+vial to the last. If the duplicates ran next to each other (1 1 2 2 3 3 4 4), later
+experiments would see more drift than earlier ones, and a series entered in table order
+would show a trend that is really just the run's drift. What matters is each
+experiment's average position in the run:
+
+| Order | Exp. 1 | Exp. 2 | Exp. 3 | Exp. 4 |
+|---|---|---|---|---|
+| 1 1 2 2 3 3 4 4 (grouped) | 1.5 | 3.5 | 5.5 | 7.5 |
+| 1 2 3 4 1 2 3 4 (repeated) | 3 | 4 | 5 | 6 |
+| 1 2 3 4 4 3 2 1 (mirrored) | 4.5 | 4.5 | 4.5 | 4.5 |
+
+With an even number of vials per experiment, the mirrored order gives every experiment
+the same average position. A drift that grows steadily over the run then shifts the
+averages of all experiments equally. This holds for any number of experiments. With an
+odd number of vials per experiment, the last block runs forward on its own, so a small
+difference remains. With four experiments in triplicate, the first and last experiment
+differ by one position on average, against nine in the grouped order. A drift that does
+not grow steadily (e.g. a jump halfway through the run) is not cancelled exactly, but
+still spread over all experiments.
+
+All output files list the vials in this order.
 
 ### 2.2 Names
 
-Each vial gets a name like `MRG-059-BC-01`:
+Each vial gets a name like `MRG-059-BC-01-2`:
 
 - `MRG-059` is the **name prefix** of the run, entered next to *Vials per experiment*.
   It is 2–3 capital letters, a hyphen and 3–4 digits (e.g. `MRG-059` or `AE-413`), and all
@@ -49,13 +78,24 @@ Each vial gets a name like `MRG-059-BC-01`:
 - The second letter stands for the catalyst: `B` Co-POM, `C` Ru(bda)(isoq)2,
   `D` Ru(dpp)(pic)2(PF6)2.
 - `A` replaces a letter when that component is left out (concentration 0), so a
-  control without catalyst is called e.g. `MRG-059-BA-01`.
-- The number counts up **separately for each letter pair**. Below the experiment table
-  the app shows one start field per letter pair in the run, so every series can continue
-  where the last run stopped. With BC starting at 13 and BA at 5 this gives
-  `BC-13, BC-14, BA-05, BA-06`. Each field starts at 1, and its value is kept for as
-  long as the letter pair stays in the table.
-- The number has at least two digits (`NAME_NUMBER_DIGITS`): `01` … `99`, then `100`.
+  control without catalyst is called e.g. `MRG-059-BA-01-1`.
+- The **experiment number** (`01`) identifies the experiment, i.e. the row of the table.
+  It counts up **separately for each letter pair**, in table order: with three BC
+  experiments and one BA control, the BC rows are `BC-01`, `BC-02`, `BC-03` and the
+  control is `BA-01`.
+- The **replicate number** (`-1`, `-2`, …) tells the vials of one experiment apart, in
+  the order the robot runs them (section 2.1). With two BC experiments in duplicate the
+  run is `BC-01-1, BC-02-1, BC-02-2, BC-01-2`. All vials of an experiment thus share
+  everything up to the replicate number, and the replicate number tells whether a vial
+  ran in the first or the second half of the run. Every vial gets a replicate number,
+  also with one vial per experiment (`BC-01-1`), so all names have the same form.
+- Below the experiment table the app shows one start field per letter pair in the run,
+  so every series can continue where the last run stopped. With BC starting at 13 and BA
+  at 5, one BC and one BA experiment in duplicate give
+  `BC-13-1, BA-05-1, BA-05-2, BC-13-2`. Each field starts at 1, and its value is kept for
+  as long as the letter pair stays in the table.
+- The experiment number has at least two digits (`NAME_NUMBER_DIGITS`): `01` … `99`,
+  then `100`.
 
 The letters live in `NAME_LETTERS` in `planner.py`. A new photosensitizer or catalyst
 must be added there as well as to `chemicals.CSV`. Until then the app reports that no
@@ -197,7 +237,8 @@ existing folder is never overwritten.
 
 **`experiments_design.csv`**: one row per vial with its name, the total volume in µL,
 the water added in mL, the target concentration of each chemical in M (buffer acid and
-base as calculated), the total buffer concentration in M and the pH. The concentrations
+base as calculated), the total buffer concentration in M, the pH and the light settings
+of its experiment (LED driver current in mA, duty cycle in %, frequency in Hz). The concentrations
 are rounded to four significant digits (`DOCUMENTED_SIGNIFICANT_DIGITS`) to keep the file
 readable, e.g. 0.006186 M instead of 0.006185841220890307 M. The file only documents the
 run; the volumes in `experiment.yml` are calculated from the exact values.
@@ -207,7 +248,8 @@ run; the volumes in `experiment.yml` are calculated from the exact values.
 this mass contains (`Amount_mmol` = concentration × volume, four significant digits) and
 a one-line instruction.
 
-**`experiment.yml`**: the robot's input. It has one entry per vial with its name,
+**`experiment.yml`**: the robot's input. It has one entry per vial, in the mirrored run
+order of section 2.1, with its name,
 `run: "true"`, the pipetting volumes in mL and the robot settings of its experiment
 (voltage, LED current, duty cycle, frequency, degassing, measurement and baseline
 times). The last entry, `<name prefix>-stop` (e.g. `MRG-059-stop`) with `run: "false"`,
@@ -284,7 +326,9 @@ by hand:
   and the amount in mmol matches the mass weighed in,
 - `experiments_design.csv` lists the water volume and rounds the concentrations to four
   significant digits, while the plan keeps the exact values,
-- names count up per letter pair, with `A` for a missing component,
+- the vials run in mirrored blocks (1 2 3 3 2 1 …) and keep the concentrations of their
+  experiment, and in duplicate every experiment has the same average position,
+- names count up per letter pair in run order, with `A` for a missing component,
 - a name prefix such as `AE-413` replaces `MRG-059` in the names and the stop entry,
   and malformed prefixes are rejected,
 - `experiment.yml` parses as YAML, has the robot's key order and ends with the stop

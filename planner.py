@@ -36,8 +36,9 @@ ENTERED_ROLES = ("photosensitizer", "catalyst", "sacrificial_oxidant")
 USABLE_PH_DISTANCE_FROM_PKA = 1.0
 
 # --- Sample names -----------------------------------------------------------------
-# A vial is named <prefix>-<photosensitizer letter><catalyst letter>-<number>, e.g.
-# MRG-059-BC-01. The prefix is set per run: 2–3 capital letters, a hyphen and 3–4 digits.
+# A vial is named <prefix>-<photosensitizer letter><catalyst letter>-<number>-<replicate>,
+# e.g. MRG-059-BC-01-2. The prefix is set per run: 2–3 capital letters, a hyphen and 3–4
+# digits. The number identifies the experiment, the replicate tells its vials apart.
 NAME_PREFIX_PATTERN = r"[A-Z]{2,3}-[0-9]{3,4}"
 DEFAULT_NAME_PREFIX = "MRG-059"
 NAME_LETTERS = {
@@ -46,7 +47,7 @@ NAME_LETTERS = {
 }
 # Letter of a vial without photosensitizer or without catalyst (control experiment).
 NO_COMPONENT_LETTER = "A"
-# Running numbers are zero-padded to this many digits (MRG-059-BC-01); 100 stays 100.
+# Experiment numbers are zero-padded to this many digits (MRG-059-BC-01-1); 100 stays 100.
 NAME_NUMBER_DIGITS = 2
 
 # --- Pipetting limits -------------------------------------------------------------
@@ -178,8 +179,9 @@ class RunPlan:
     Attributes
     ----------
     vials : pd.DataFrame
-        One row per vial: name, target concentrations (`<role>_M`), addition volumes in mL
-        (`volume_<role>`, `volume_water`) and robot settings.
+        One row per vial, in the order the robot runs them: name, target concentrations
+        (`<role>_M`), addition volumes in mL (`volume_<role>`, `volume_water`) and robot
+        settings.
     stocks : pd.DataFrame
         One row per stock solution with its concentration and preparation instructions.
     chemical_by_role : dict
@@ -265,8 +267,8 @@ def plan_run(
     buffer_concentration : float
         Total buffer concentration (acid + base) in every vial, in M.
     start_numbers : dict, optional
-        First running number of each letter pair, e.g. {"BC": 13, "BA": 5}; pairs not
-        listed start at 1.
+        Number of the first experiment of each letter pair, e.g. {"BC": 13, "BA": 5};
+        pairs not listed start at 1.
     name_prefix : str, optional
         Prefix of every vial name in the run: 2–3 capital letters, a hyphen and 3–4 digits.
 
@@ -283,7 +285,7 @@ def plan_run(
     validate_name_prefix(name_prefix)
     chemical_by_role = {**chemical_by_role, "buffer_acid": buffer_system["acid"], "buffer_base": buffer_system["base"]}
     # The experiment's index label stays with its vials, so the overview can colour them alike.
-    vials = experiments.loc[experiments.index.repeat(replicates)].reset_index(names="experiment")
+    vials = experiments.loc[order_vials(experiments.index, replicates)].reset_index(names="experiment")
     vials.insert(0, "name", build_vial_names(vials, chemical_by_role, start_numbers or {}, name_prefix))
     vials["total_volume_ml"] = total_volume_ml
     vials["buffer_total_M"] = buffer_concentration
@@ -406,8 +408,37 @@ def split_buffer(ph_values, pka, buffer_concentration):
     return buffer_concentration * (1 - base_fraction), buffer_concentration * base_fraction
 
 
+def order_vials(experiment_labels, replicates):
+    """Experiment label of every vial, in the order the robot runs them.
+
+    The vials run in blocks of one vial per experiment, every second block reversed:
+    1 2 3 4 4 3 2 1. With an even number of vials per experiment, every experiment then
+    has the same average position in the run, so a drift that grows steadily over the run
+    (e.g. leakage) shifts all experiments alike instead of faking a trend along the table.
+
+    Parameters
+    ----------
+    experiment_labels : pd.Index
+        Index labels of the experiment table, in table order.
+    replicates : int
+        Number of vials per experiment.
+
+    Returns
+    -------
+    list
+        One label per vial.
+    """
+    forward = list(experiment_labels)
+    blocks = [forward if block % 2 == 0 else forward[::-1] for block in range(replicates)]
+    return [label for block in blocks for label in block]
+
+
 def build_vial_names(vials, chemical_by_role, start_numbers, name_prefix):
-    """Name every vial, counting up separately for each letter pair.
+    """Name every vial: one number per experiment, then the replicate number.
+
+    Experiments are numbered in table order, counting up separately for each letter pair.
+    The vials of one experiment share its number and are told apart by `-1`, `-2`, … in
+    the order the robot runs them.
 
     Parameters
     ----------
@@ -423,12 +454,23 @@ def build_vial_names(vials, chemical_by_role, start_numbers, name_prefix):
     Returns
     -------
     pd.Series
-        Names such as MRG-059-BC-01.
+        Names such as MRG-059-BC-01-2.
     """
     letter_pairs = build_letter_pairs(vials, chemical_by_role)
-    first_numbers = letter_pairs.map(start_numbers).fillna(1).astype(int)
-    numbers = first_numbers + letter_pairs.groupby(letter_pairs).cumcount()
-    return name_prefix + "-" + letter_pairs + "-" + numbers.astype(str).str.zfill(NAME_NUMBER_DIGITS)
+    # The first block of the run is in table order, so order of first appearance is table order.
+    table_positions = pd.Series(pd.factorize(vials["experiment"])[0], index=vials.index)
+    experiment_offsets = table_positions.groupby(letter_pairs).rank(method="dense").astype(int) - 1
+    numbers = letter_pairs.map(start_numbers).fillna(1).astype(int) + experiment_offsets
+    replicate_numbers = vials.groupby("experiment").cumcount() + 1
+    return (
+        name_prefix
+        + "-"
+        + letter_pairs
+        + "-"
+        + numbers.astype(str).str.zfill(NAME_NUMBER_DIGITS)
+        + "-"
+        + replicate_numbers.astype(str)
+    )
 
 
 def build_letter_pairs(experiments, chemical_by_role):
@@ -658,7 +700,7 @@ def compute_water_volumes(vials, total_volume_ml):
 
 
 def build_experiment_design(plan):
-    """Table of vial names, water volumes and target concentrations, as written to experiments_design.csv.
+    """Table of vial names, water volumes, target concentrations and light settings, as written to experiments_design.csv.
 
     Concentrations are rounded to DOCUMENTED_SIGNIFICANT_DIGITS; `plan` keeps the exact values.
 
@@ -686,6 +728,9 @@ def build_experiment_design(plan):
         round_to_significant_digits, digits=DOCUMENTED_SIGNIFICANT_DIGITS
     )
     design["pH"] = plan.vials["pH"]
+    design["LED_driver_current_mA"] = plan.vials["LED_driver_current_mA"]
+    design["Duty_Cycle_%"] = plan.vials["Duty_Cycle"]
+    design["Frequency_Hz"] = plan.vials["Frequency"]
     return design
 
 

@@ -52,14 +52,14 @@ def test_start_number_renames_the_vials():
     app = AppTest.from_file(APP_FILE).run()
     find_number_input(app, "Start MRG-059-BC-").set_value(13).run()
 
-    assert app.dataframe[1].value["name"].tolist()[:2] == ["MRG-059-BC-13", "MRG-059-BC-14"]
+    assert app.dataframe[1].value["name"].tolist()[:2] == ["MRG-059-BC-13-1", "MRG-059-BC-14-1"]
 
 
 def test_name_prefix_renames_the_vials():
     app = AppTest.from_file(APP_FILE).run()
     find_text_input(app, "Name prefix").set_value("AE-413").run()
 
-    assert app.dataframe[1].value["name"].tolist()[:2] == ["AE-413-BC-01", "AE-413-BC-02"]
+    assert app.dataframe[1].value["name"].tolist()[:2] == ["AE-413-BC-01-1", "AE-413-BC-02-1"]
     assert find_number_input(app, "Start AE-413-BC-")
 
 
